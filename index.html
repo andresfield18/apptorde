@@ -874,6 +874,26 @@ textarea.form-input{resize:none;min-height:72px;}
   </div>
 </div>
 
+<!-- ══ LOGIN ══ -->
+<div id="login-screen" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg);overflow-y:auto;">
+  <div style="max-width:380px;margin:0 auto;padding:64px 24px 32px;">
+    <div style="text-align:center;font-size:52px;">💵</div>
+    <div style="text-align:center;font-size:26px;font-weight:900;color:var(--green1);margin:8px 0 4px;">AppTorde</div>
+    <div style="text-align:center;font-size:14px;color:var(--text2);margin-bottom:28px;">Ingresa con tu usuario y contraseña</div>
+    <label class="form-label" for="lg-user">Usuario</label>
+    <input class="form-input" id="lg-user" type="text" autocomplete="username" autocapitalize="none" style="margin-bottom:14px;">
+    <label class="form-label" for="lg-pass">Contraseña</label>
+    <input class="form-input" id="lg-pass" type="password" autocomplete="current-password" style="margin-bottom:14px;" onkeydown="if(event.key==='Enter')doLogin()">
+    <div id="lg-url-box" style="display:none;margin-bottom:14px;">
+      <label class="form-label" for="lg-url">URL del servidor (Apps Script)</label>
+      <input class="form-input" id="lg-url" type="url" placeholder="https://script.google.com/macros/s/.../exec" style="font-size:12px;">
+    </div>
+    <div id="lg-msg" style="min-height:20px;font-size:13px;font-weight:700;color:var(--red);margin-bottom:10px;"></div>
+    <button class="btn btn-primary" id="lg-btn" style="width:100%;font-size:16px;" onclick="doLogin()">Ingresar</button>
+    <div style="text-align:center;margin-top:18px;"><a href="#" onclick="toggleUrlBox();return false;" style="font-size:12px;color:var(--text3);">⚙️ Configurar servidor</a></div>
+  </div>
+</div>
+
 <!-- ══ MODAL: Sincronización ══ -->
 <div class="modal-backdrop" id="modal-config">
   <div class="modal">
@@ -902,6 +922,7 @@ textarea.form-input{resize:none;min-height:72px;}
       <button class="btn btn-ghost" style="flex:1;" onclick="closeModal('modal-config')">Cerrar</button>
       <button class="btn btn-primary" style="flex:2;" onclick="saveConfig()">Guardar URL</button>
     </div>
+    <button class="btn btn-ghost" style="width:100%;margin-top:12px;color:var(--red);" onclick="cerrarSesion()">🚪 Cerrar sesión</button>
   </div>
 </div>
 
@@ -935,7 +956,10 @@ let histMes=new Date().getMonth(), histAño=new Date().getFullYear(), histFiltro
 let resMes=new Date().getMonth(), resAño=new Date().getFullYear();
 let selWeekDay=null;
 let charts={};
-let WEBAPP_URL='https://script.google.com/macros/s/AKfycbyNQAgFu_OKouwYmYSEhMNIg5_HFa6fnur9Vq1fsybBgjqq-p8JlRr7bSilzFB9s-23/exec';
+// ⚙️ Pega aquí la URL /exec de tu Apps Script (la misma para todos los usuarios)
+const WEBAPP_URL_DEFAULT='https://script.google.com/macros/s/AKfycbyNQAgFu_OKouwYmYSEhMNIg5_HFa6fnur9Vq1fsybBgjqq-p8JlRr7bSilzFB9s-23/exec';
+let WEBAPP_URL=WEBAPP_URL_DEFAULT;
+let SESSION=null; // {token, usuario, nombre}
 
 // ═══════════════════════════════════════
 // PERSIST
@@ -949,7 +973,7 @@ function save(){
     localStorage.setItem('fa_catt',JSON.stringify(catTareas));
     localStorage.setItem('fa_pres',JSON.stringify(presupuestos));
     localStorage.setItem('fa_habitos',JSON.stringify(habitos));
-    if(WEBAPP_URL) syncToSheets();
+    if(WEBAPP_URL&&SESSION) syncToSheets();
   }catch(e){}
 }
 
@@ -962,7 +986,8 @@ function loadLocal(){
     const ct=localStorage.getItem('fa_catt'); if(ct) catTareas=JSON.parse(ct);
     const pr=localStorage.getItem('fa_pres'); if(pr) presupuestos=JSON.parse(pr);
     const ha=localStorage.getItem('fa_habitos'); if(ha) habitos=JSON.parse(ha);
-    WEBAPP_URL=localStorage.getItem('fa_url')||'';
+    WEBAPP_URL=localStorage.getItem('fa_url')||WEBAPP_URL_DEFAULT;
+    const ss=localStorage.getItem('fa_session'); if(ss) SESSION=JSON.parse(ss);
   }catch(e){}
 }
 
@@ -1018,12 +1043,13 @@ function setSyncStatus(msg){
 }
 
 async function loadFromSheets(){
-  if(!WEBAPP_URL) return;
+  if(!WEBAPP_URL||!SESSION) return;
   setSyncStatus('⏳ Cargando desde Sheets...');
   try{
-    var res=await fetch(WEBAPP_URL+'?t='+Date.now(),{method:'GET',redirect:'follow'});
+    var res=await fetch(WEBAPP_URL+'?token='+encodeURIComponent(SESSION.token)+'&t='+Date.now(),{method:'GET',redirect:'follow'});
     if(!res.ok) throw new Error('HTTP '+res.status);
     var data=await res.json();
+    if(!data.ok && data.error==='AUTH'){ sesionExpirada(); throw new Error('Sesión expirada'); }
     if(!data.ok && data.error) throw new Error(data.error);
 
     // LOCAL SIEMPRE GANA
@@ -1105,8 +1131,9 @@ async function loadFromSheets(){
 }
 
 async function syncToSheets(){
-  if(!WEBAPP_URL) return;
+  if(!WEBAPP_URL||!SESSION) return false;
   const body={
+    token:SESSION.token,
     entradas:[['id','tipo','monto','catId','desc','fecha']].concat(entradas.map(function(e){return [e.id,e.tipo,e.monto,e.catId,e.desc||'',e.fecha];})),
     tareas:[['id','titulo','desc','prioridad','fecha','done','vencida','catTareaId']].concat(tareas.map(function(t){return [t.id,t.titulo,t.desc||'',t.prioridad,t.fecha,t.done,t.vencida||false,t.catTareaId||''];})),
     catgasto:[['id','icon','name','color']].concat(catGasto.map(function(c){return [c.id,c.icon,c.name,c.color];})),
@@ -1122,8 +1149,10 @@ async function syncToSheets(){
       body:JSON.stringify(body)
     });
     var result=await res.json();
+    if(!result.ok&&result.error==='AUTH'){ sesionExpirada(); return false; }
     setSyncStatus(result.ok?'✅ Guardado':'❌ Error: '+(result.error||'desconocido'));
-  }catch(e){ setSyncStatus('❌ '+e.message); }
+    return !!result.ok;
+  }catch(e){ setSyncStatus('❌ '+e.message); return false; }
 }
 
 async function syncNow(){
@@ -1146,6 +1175,78 @@ async function syncNow(){
   }
 }
 
+// ═══════════════════════════════════════
+// SESIÓN / LOGIN
+// ═══════════════════════════════════════
+function mostrarLogin(msg){
+  document.getElementById('login-screen').style.display='block';
+  document.getElementById('lg-msg').textContent=msg||'';
+  document.getElementById('lg-url-box').style.display=WEBAPP_URL?'none':'block';
+  document.getElementById('lg-url').value=WEBAPP_URL||'';
+}
+function toggleUrlBox(){
+  var b=document.getElementById('lg-url-box');
+  b.style.display=b.style.display==='none'?'block':'none';
+}
+function limpiarDatosLocales(){
+  entradas=[];tareas=[];catGasto=[];catIngreso=[];catTareas=[];presupuestos={};habitos=[];
+  ['fa_entradas','fa_tareas','fa_catg','fa_cati','fa_catt','fa_pres','fa_habitos'].forEach(function(k){localStorage.removeItem(k);});
+}
+async function doLogin(){
+  var user=document.getElementById('lg-user').value.trim().toLowerCase();
+  var pass=document.getElementById('lg-pass').value;
+  var urlIn=document.getElementById('lg-url').value.trim();
+  var msg=document.getElementById('lg-msg'), btn=document.getElementById('lg-btn');
+  if(urlIn){
+    if(!urlIn.includes('script.google.com')){msg.textContent='URL del servidor inválida';return;}
+    WEBAPP_URL=urlIn; localStorage.setItem('fa_url',urlIn);
+  }
+  if(!WEBAPP_URL){msg.textContent='Falta configurar la URL del servidor';document.getElementById('lg-url-box').style.display='block';return;}
+  if(!user||!pass){msg.textContent='Ingresa usuario y contraseña';return;}
+  btn.disabled=true; btn.textContent='Ingresando...'; msg.textContent='';
+  try{
+    var res=await fetch(WEBAPP_URL,{method:'POST',headers:{'Content-Type':'text/plain'},
+      body:JSON.stringify({action:'login',usuario:user,clave:pass})});
+    var r=await res.json();
+    if(!r.ok){msg.textContent=r.error||'No se pudo ingresar';return;}
+    // Si este dispositivo tenía datos de OTRO usuario (o solo categorías por defecto), se limpian
+    var owner=localStorage.getItem('fa_owner');
+    var hayDatos=entradas.length||tareas.length||habitos.length;
+    if(owner!==r.usuario && (owner || !hayDatos)) limpiarDatosLocales();
+    SESSION={token:r.token,usuario:r.usuario,nombre:r.nombre};
+    localStorage.setItem('fa_session',JSON.stringify(SESSION));
+    localStorage.setItem('fa_owner',r.usuario);
+    document.getElementById('lg-pass').value='';
+    document.getElementById('login-screen').style.display='none';
+    await loadFromSheets();
+    initDefaultCats();
+    save();
+    renderAll();
+  }catch(e){
+    msg.textContent='Error de conexión: '+e.message;
+  }finally{
+    btn.disabled=false; btn.textContent='Ingresar';
+  }
+}
+function sesionExpirada(){
+  SESSION=null; localStorage.removeItem('fa_session');
+  mostrarLogin('Tu sesión expiró. Ingresa de nuevo.');
+}
+async function cerrarSesion(){
+  if(!SESSION){mostrarLogin();return;}
+  setSyncStatus('🔄 Guardando antes de salir...');
+  var ok=await syncToSheets();
+  if(!ok && !confirm('No se pudo sincronizar con Google Sheets. Si cierras sesión, los cambios no guardados en este dispositivo se perderán. ¿Cerrar sesión de todas formas?')) return;
+  try{
+    await fetch(WEBAPP_URL,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action:'logout',token:SESSION.token})});
+  }catch(e){}
+  SESSION=null;
+  localStorage.removeItem('fa_session'); localStorage.removeItem('fa_owner');
+  limpiarDatosLocales(); initDefaultCats(); renderAll();
+  closeModal('modal-config');
+  mostrarLogin();
+}
+
 function openConfigModal(){
   document.getElementById('cfg-url').value=WEBAPP_URL||'';
   showModal('modal-config');
@@ -1155,7 +1256,7 @@ function openSyncModal(){
   var inp=document.getElementById('cfg-url');
   if(inp) inp.value=WEBAPP_URL||'';
   var est=document.getElementById('sync-estado-txt');
-  if(est) est.textContent=WEBAPP_URL?'✅ Conectado a Google Sheets':'❌ Sin URL configurada';
+  if(est) est.textContent=SESSION?('✅ Sesión: '+(SESSION.nombre||SESSION.usuario)):(WEBAPP_URL?'🔒 Sin sesión':'❌ Sin URL configurada');
   showModal('modal-config');
 }
 function saveConfig(){
@@ -2805,6 +2906,7 @@ buildColorGrid();
 
 // Siempre renderiza con datos locales primero — NO auto-sync
 renderAll();
+if(!SESSION) mostrarLogin();
 // Mostrar estado de conexión sin sincronizar automáticamente
 if(WEBAPP_URL){
   document.getElementById('sync-bar').style.display='block';
