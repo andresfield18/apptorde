@@ -1677,7 +1677,7 @@ function renderCatList(gList, iList, totalG, totalI){
   var totalEl = document.getElementById('cat-list-total');
   var listEl  = document.getElementById('main-cat-list');
 
-  if(titleEl){ titleEl.textContent = icon+' '+label; titleEl.style.color = color; }
+  if(titleEl){ titleEl.innerHTML = icon+' '+label; titleEl.style.color = color; titleEl.style.display='inline-flex'; titleEl.style.alignItems='center'; titleEl.style.gap='4px'; }
   if(totalEl){ totalEl.textContent = fmt(total); totalEl.style.color = color; }
   if(!listEl) return;
 
